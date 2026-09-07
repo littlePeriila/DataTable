@@ -1,0 +1,71 @@
+MainForm 'Excel导表工具' bounds={X=485,Y=166,Width=950,Height=700} dock=None vis=True
+  MenuStrip '' bounds={X=0,Y=135,Width=934,Height=25} dock=Top vis=True
+  GroupBox '配置' bounds={X=0,Y=0,Width=934,Height=135} dock=Top vis=True
+    TableLayoutPanel '' bounds={X=10,Y=38,Width=914,Height=89} dock=Fill vis=True
+      Label 'Excel路径:' bounds={X=3,Y=0,Width=104,Height=28} dock=Fill vis=True
+      TextBox 'C:/Project/DataTable/data/' bounds={X=113,Y=3,Width=713,Height=23} dock=Fill vis=True
+      Button '浏览...' bounds={X=832,Y=3,Width=79,Height=22} dock=Fill vis=True
+      Label '数据保存路径:' bounds={X=3,Y=28,Width=104,Height=28} dock=Fill vis=True
+      TextBox 'C:/Project/DataTable/Result/' bounds={X=113,Y=31,Width=713,Height=23} dock=Fill vis=True
+      Button '浏览...' bounds={X=832,Y=31,Width=79,Height=22} dock=Fill vis=True
+      Label 'C#类保存路径:' bounds={X=3,Y=56,Width=104,Height=33} dock=Fill vis=True
+      TextBox 'C:/Project/DataTable/Result/' bounds={X=113,Y=59,Width=713,Height=23} dock=Fill vis=True
+      Button '浏览...' bounds={X=832,Y=59,Width=79,Height=27} dock=Fill vis=True
+  SplitContainer '' bounds={X=0,Y=0,Width=934,Height=661} dock=Fill vis=True
+    SplitterPanel '' bounds={X=0,Y=0,Width=934,Height=469} dock=None vis=True
+      GroupBox 'Excel文件列表' bounds={X=0,Y=0,Width=934,Height=469} dock=Fill vis=True
+        Panel '' bounds={X=5,Y=68,Width=924,Height=396} dock=Fill vis=True
+          TableLayoutPanel '' bounds={X=0,Y=0,Width=924,Height=112} dock=Top vis=True
+            Label '文件名' bounds={X=3,Y=0,Width=638,Height=26} dock=Fill vis=True
+            Label '大小' bounds={X=647,Y=0,Width=74,Height=26} dock=Fill vis=True
+            Label '检查' bounds={X=727,Y=0,Width=54,Height=26} dock=Fill vis=True
+            Label '子表' bounds={X=787,Y=0,Width=74,Height=26} dock=Fill vis=True
+            Label '导出' bounds={X=867,Y=0,Width=54,Height=26} dock=Fill vis=True
+            Label 'Data.xlsx' bounds={X=3,Y=26,Width=638,Height=28} dock=Fill vis=True
+            Label '16.8 KB' bounds={X=647,Y=26,Width=74,Height=28} dock=Fill vis=True
+            Button '检查' bounds={X=727,Y=29,Width=54,Height=22} dock=Fill vis=True
+            Button '查看子表' bounds={X=787,Y=29,Width=74,Height=22} dock=Fill vis=True
+            Button '导出' bounds={X=867,Y=29,Width=54,Height=22} dock=Fill vis=True
+            Label 'Sound.xlsx' bounds={X=3,Y=54,Width=638,Height=28} dock=Fill vis=True
+            Label '8.9 KB' bounds={X=647,Y=54,Width=74,Height=28} dock=Fill vis=True
+            Button '检查' bounds={X=727,Y=57,Width=54,Height=22} dock=Fill vis=True
+            Button '查看子表' bounds={X=787,Y=57,Width=74,Height=22} dock=Fill vis=True
+            Button '导出' bounds={X=867,Y=57,Width=54,Height=22} dock=Fill vis=True
+            Label 'UI.xlsx' bounds={X=3,Y=82,Width=638,Height=30} dock=Fill vis=True
+            Label '10.1 KB' bounds={X=647,Y=82,Width=74,Height=30} dock=Fill vis=True
+            Button '检查' bounds={X=727,Y=85,Width=54,Height=24} dock=Fill vis=True
+            Button '查看子表' bounds={X=787,Y=85,Width=74,Height=24} dock=Fill vis=True
+            Button '导出' bounds={X=867,Y=85,Width=54,Height=24} dock=Fill vis=True
+        Panel '' bounds={X=5,Y=38,Width=924,Height=30} dock=Top vis=True
+          TextBox '' bounds={X=45,Y=4,Width=879,Height=23} dock=Fill vis=True
+          Label '筛选:' bounds={X=0,Y=4,Width=45,Height=24} dock=Left vis=True
+    SplitterPanel '' bounds={X=0,Y=473,Width=934,Height=188} dock=None vis=True
+      GroupBox '日志' bounds={X=0,Y=0,Width=934,Height=188} dock=Fill vis=True
+        TextBox '[INFO]  工作目录: C:\Project\DataTable\DataTable\bin\Debug\net6.0-windows
+[INFO]  Config.I.excelPath 原始值: C:/Project/DataTable/data/
+[INFO]  完整路径: C:\Project\DataTable\data\
+[INFO]  找到 4 个文件
+[INFO]  已加载 3 个Excel文件到列表
+[INFO]  [DBG] table rows=4 h=112 ctrls=20 bounds={X=0,Y=0,Width=924,Height=112}
+' bounds={X=5,Y=21,Width=924,Height=162} dock=Fill vis=True
+table rows=4 height=112 controls=20
+  ctrl[0] pos=(0,0) text='文件名' bounds={X=3,Y=0,Width=638,Height=26} vis=True
+  ctrl[1] pos=(1,0) text='大小' bounds={X=647,Y=0,Width=74,Height=26} vis=True
+  ctrl[2] pos=(2,0) text='检查' bounds={X=727,Y=0,Width=54,Height=26} vis=True
+  ctrl[3] pos=(3,0) text='子表' bounds={X=787,Y=0,Width=74,Height=26} vis=True
+  ctrl[4] pos=(4,0) text='导出' bounds={X=867,Y=0,Width=54,Height=26} vis=True
+  ctrl[5] pos=(0,1) text='Data.xlsx' bounds={X=3,Y=26,Width=638,Height=28} vis=True
+  ctrl[6] pos=(1,1) text='16.8 KB' bounds={X=647,Y=26,Width=74,Height=28} vis=True
+  ctrl[7] pos=(2,1) text='检查' bounds={X=727,Y=29,Width=54,Height=22} vis=True
+  ctrl[8] pos=(3,1) text='查看子表' bounds={X=787,Y=29,Width=74,Height=22} vis=True
+  ctrl[9] pos=(4,1) text='导出' bounds={X=867,Y=29,Width=54,Height=22} vis=True
+  ctrl[10] pos=(0,2) text='Sound.xlsx' bounds={X=3,Y=54,Width=638,Height=28} vis=True
+  ctrl[11] pos=(1,2) text='8.9 KB' bounds={X=647,Y=54,Width=74,Height=28} vis=True
+  ctrl[12] pos=(2,2) text='检查' bounds={X=727,Y=57,Width=54,Height=22} vis=True
+  ctrl[13] pos=(3,2) text='查看子表' bounds={X=787,Y=57,Width=74,Height=22} vis=True
+  ctrl[14] pos=(4,2) text='导出' bounds={X=867,Y=57,Width=54,Height=22} vis=True
+  ctrl[15] pos=(0,3) text='UI.xlsx' bounds={X=3,Y=82,Width=638,Height=30} vis=True
+  ctrl[16] pos=(1,3) text='10.1 KB' bounds={X=647,Y=82,Width=74,Height=30} vis=True
+  ctrl[17] pos=(2,3) text='检查' bounds={X=727,Y=85,Width=54,Height=24} vis=True
+  ctrl[18] pos=(3,3) text='查看子表' bounds={X=787,Y=85,Width=74,Height=24} vis=True
+  ctrl[19] pos=(4,3) text='导出' bounds={X=867,Y=85,Width=54,Height=24} vis=True

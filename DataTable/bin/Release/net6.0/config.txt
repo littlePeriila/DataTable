@@ -1,0 +1,9 @@
+#excel存放路径;
+excelPath:../data/;
+#数据保存路径;
+dataPath:../Result/Data;
+#c#类保存路径;
+classPath:../Result/CSharp;
+#输出类型;
+exportType:Json;
+isExportServer:False

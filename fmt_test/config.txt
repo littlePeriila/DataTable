@@ -1,0 +1,9 @@
+#excelPath;
+excelPath:C:/Project/DataTable/data/;
+#dataPath;
+dataPath:C:/Project/DataTable/Result/Data;
+#classPath;
+classPath:C:/Project/DataTable/Result/CSharp;
+#exportType;
+exportType:Json;
+isExportServer:False

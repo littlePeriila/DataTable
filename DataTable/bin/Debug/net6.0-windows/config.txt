@@ -1,0 +1,9 @@
+#excel存放路径;
+excelPath:C:/Project/DataTable/data/;
+#数据保存路径;
+dataPath:C:/Project/DataTable/Result/;
+#c#类保存路径;
+classPath:C:/Project/DataTable/Result/;
+#输出类型 (多个用&连接，如 Json&Bytes);
+exportType:Json;
+isExportServer:false

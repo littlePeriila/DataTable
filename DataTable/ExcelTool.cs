@@ -3,10 +3,21 @@ using NPOI.SS.UserModel;
 using NPOI.XSSF.UserModel;
 using System.Data;
 using System.IO;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace PerillaTable
 {
+    public class SheetInfo
+    {
+        public string SheetName;
+        public string ClassName;
+        public int RowCount;
+        public int ColumnCount;
+        public int SheetIndex;
+        public DateTime ModifyTime;
+    }
+
     class ExcelTool
     {
         public ExcelTool()
@@ -16,59 +27,7 @@ namespace PerillaTable
 
         private string classStr;
         private string propertyStr;
-        private string parseStr;
         private string parseBytes;
-        private string enumStr;
-
-        private const char split01 = '~';
-        private const char split02 = ';';
-        private const char split03 = '}';
-
-        string className = "";
-
-        Dictionary<string, Dictionary<string, int>> enumTypesDic = new Dictionary<string, Dictionary<string, int>>();
-        Dictionary<string, Dictionary<string, Int16>> enumTypesDicByte = new Dictionary<string, Dictionary<string, Int16>>();
-
-        public void CreatEnumData()
-        {
-            string path = Config.I.excelPath + "enum.xlsx";
-            string classPath = Config.I.classPath;
-            List<DataTable> result = ExcelToDataTable(path);
-
-            DataTable curSheet = result[0];
-
-            int columns = curSheet.Columns.Count;
-            int rows = curSheet.Rows.Count;
-
-            for (int j = 0; j < columns; ++j)
-            {
-                string enumStrTemp = enumStr;
-                string enumName = curSheet.Rows[0][j].ToString();
-                enumTypesDic.Add(enumName.ToLower(), new Dictionary<string, int>());
-                enumTypesDicByte.Add(enumName.ToLower(), new Dictionary<string, Int16>());
-                int count = 0;
-                Int16 countbyte = 0;
-                enumStrTemp = enumStrTemp.Replace("Type", UpperFirstLetter(enumName));
-
-                for (int i = 1; i < rows; ++i)
-                {
-                    if (curSheet.Rows[i][j].ToString() == "")
-                        break;
-                    string Type = curSheet.Rows[i][j].ToString();
-                    enumTypesDic[enumName.ToLower()].Add(Type.ToLower(), count++);
-                    enumTypesDicByte[enumName.ToLower()].Add(Type.ToLower(), (Int16)countbyte++);
-
-                    enumStrTemp += $@"    {UpperFirstLetter(Type)},
-";
-                }
-
-                enumStrTemp += @"}";
-                string data = File.ReadAllText(classPath + "EnumType.cs");
-                data += enumStrTemp;
-                File.WriteAllText(classPath + "EnumType.cs", data);
-            }
-        }
-
 
         public void CreateDataTable(string path)
         {
@@ -83,128 +42,76 @@ namespace PerillaTable
             int tableNum = result.Count;
             for (int index = 0; index < tableNum; index++)
             {
-                DataTable curSheet = result[index];
+                ProcessSheet(result[index], path, classPath);
+            }
+        }
 
-                //excel中包含多个sheet,sheet名为类型，忽略sheet名中包含"sheet"的表单;
-                if (tableNum > 1)
+        public void CreateDataTable(string path, int sheetIndex)
+        {
+            string classPath = Config.I.classPath;
+            List<DataTable> result = ExcelToDataTable(path);
+            if (result == null)
+            {
+                Logger.Log($"ExcelToDataTable:{path} NULL");
+                return;
+            }
+
+            int tableNum = result.Count;
+            if (sheetIndex < 0 || sheetIndex >= tableNum)
+            {
+                Logger.Error($"CreateDataTable: sheetIndex {sheetIndex} out of range (0..{tableNum - 1})");
+                return;
+            }
+
+            ProcessSheet(result[sheetIndex], path, classPath);
+        }
+
+        private void ProcessSheet(DataTable curSheet, string path, string classPath)
+        {
+            //类名即sheet名（sheet名包含"sheet"的表单已在读取时跳过）
+            string className = curSheet.TableName;
+
+            int columns = curSheet.Columns.Count;
+            int rows = curSheet.Rows.Count;
+
+            //sheet名 = 类名
+            string cshapClassStr = classStr;
+            string parseBytesStr = parseBytes;
+            cshapClassStr = cshapClassStr.Replace("className", className);
+
+            string parseByBytes = "";
+
+            #region 生成C#类
+            //第1行备注(以#开头可禁用该列)、第2行name、第3行类型
+            for (int i = 0; i < columns; ++i)
+            {
+                if (curSheet.Rows[0][i].ToString().StartsWith("#"))
+                    continue;
+
+                string dataType = curSheet.Rows[2][i].ToString();
+                string dataName = UpperFirstLetter(curSheet.Rows[1][i].ToString());
+                string add = "";
+
+                if (dataType.EndsWith("[]"))
                 {
-                    className = curSheet.Rows[0][0].ToString().Split('#')[1];
+                    add = dataType.Split('[')[0];
+                    dataType = "array";
                 }
-                //只有一个sheet的excel文件，文件名为类名;
-                else
+                else if (dataType.StartsWith("dic"))
                 {
-                    string[] tempS11 = path.Split('/');
-                    className = tempS11[tempS11.Length - 1].Split('.')[0];
+                    dataType = dataType.Substring(0, dataType.Length - 1);
+                    add = dataType.Split('<')[1];
+                    dataType = "dic";
                 }
 
-                int columns = curSheet.Columns.Count;
-                int rows = curSheet.Rows.Count;
-
-                //sheet名 = 类名
-                string cshapClassStr = classStr;
-                string parseBystrStr = parseStr;
-                string parseBytesStr = parseBytes;
-                cshapClassStr = cshapClassStr.Replace("className", className);
-
-                string parseByStr = "";
-                string parseByBytes = "";
-
-                #region 生成C#类
-                //第一行类型
-                for (int i = 0; i < columns; ++i)
+                if (dataType == "dic")
                 {
-                    if (curSheet.Rows[0][i].ToString().StartsWith("#"))
-                        continue;
-
-                    string dataType = "";
-                    string dataName = "";
-                    string add = "";
-
-                    for (int j = 1; j < 3; ++j)
-                    {
-                        string tempRow0 = curSheet.Rows[j][0].ToString();
-                        switch (tempRow0.ToLower())
-                        {
-                            case "#type":
-                                {
-                                    dataType = curSheet.Rows[j][i].ToString();
-                                    if (dataType.EndsWith("[]"))
-                                    {
-                                        add = dataType.Split('[')[0];
-                                        dataType = "array";
-                                    }
-                                    else if (dataType.StartsWith("dic"))
-                                    {
-                                        dataType = dataType.Substring(0, dataType.Length - 1);
-                                        add = dataType.Split('<')[1];
-                                        dataType = "dic";
-                                    }
-                                    else if (dataType.StartsWith("enum"))
-                                    {
-                                        add = "";
-                                        int enumCount = 0;
-                                        for (int k = 4; k < rows; ++k)
-                                        {
-                                            string strenum = curSheet.Rows[k][i].ToString();
-                                            if (!add.Contains(strenum))
-                                            {
-                                                add += $"{strenum}:{enumCount},";
-                                                enumCount++;
-                                            }
-                                        }
-                                        add = add.Substring(0, add.Length - 1);
-                                    }
-
-                                    break;
-                                }
-                            case "#name":
-                                {
-                                    dataName = UpperFirstLetter(curSheet.Rows[j][i].ToString());
-                                    if (dataType == "dic")
-                                    {
-                                        string[] tempStr3 = dataName.Split(':');
-                                        dataName = tempStr3[0];
-                                    }
-
-                                    break;
-                                }
-                            default:
-                                {
-                                    if (tempRow0 == "")
-                                    {
-                                        continue;
-                                    }
-                                    break;
-                                }
-                        }
-                    }
+                    string[] tempStr3 = dataName.Split(':');
+                    dataName = tempStr3[0];
+                }
 
                     switch (dataType)
                     {
-                        case "enum":
-                            Dictionary<string, int> tempStrs = new Dictionary<string, int>();
-
-                            string[] strstemp1 = add.Split(',');
-                            foreach (string tempStr in strstemp1)
-                            {
-                                string[] strstemp2 = tempStr.Split(':');
-                                tempStrs.Add(strstemp2[0], int.Parse(strstemp2[1]));
-                            }
-
-                            string enumStr2 = @"
-        public dataType dataName{ get; protected set; }
-";
-                            enumStr2 = enumStr2.Replace("dataType", "Enum" + dataName);
-                            enumStr2 = enumStr2.Replace("dataName", dataName);
-
-                            cshapClassStr += enumStr2;
-
-                            parseByStr += $@"
-            {dataName} = (Enum{dataName})int.Parse(tempStrs[count++]);";
-                            parseByBytes += $@"
-            {dataName} = (Enum{dataName})rd.ReadInt16();";
-
-                            break;
                         case "array":
 
                             string arrStr = @"
@@ -215,36 +122,13 @@ namespace PerillaTable
 
                             cshapClassStr += arrStr;
 
-                            string typeStr = "str";
-                            if (add == "int")
-                                typeStr = "int.Parse(value)";
-                            else if (add == "float")
-                                typeStr = "float.Parse(value)";
-                            else if (add == "bool")
-                                typeStr = "int.Parse(value) != 0";
-
-                            typeStr = typeStr.Replace("value", "str");
-
-                            string tempArr = "string[] tempArr";
-                            if (parseByStr.Contains(tempArr))
-                                tempArr = "tempArr";
-                            parseByStr += $@"
-            {tempArr} = tempStrs[count++].Split(',');
-            foreach(string str in tempArr)
-            {{
-                {dataName}.Add({typeStr});
-            }};";
-
-
-                            typeStr = "rd.ReadString()";
+                            string typeStr = "rd.ReadString()";
                             if (add == "int")
                                 typeStr = "rd.ReadInt32()";
                             else if (add == "float")
                                 typeStr = "rd.ReadSingle()";
                             else if (add == "bool")
                                 typeStr = "rd.ReadBoolean()";
-
-                            typeStr = typeStr.Replace("value", "str");
 
                             string countStr = "int count";
                             if (parseByBytes.Contains(countStr))
@@ -283,13 +167,6 @@ namespace PerillaTable
                                     vecStr = vecStr.Replace("name", dataName);
                                     cshapClassStr += vecStr;
 
-                                    tempArr = "string[] tempArr";
-                                    if (parseByStr.Contains(tempArr))
-                                        tempArr = "tempArr";
-                                    parseByStr += $@"
-            {tempArr} = tempStrs[count++].Split(',');
-            {dataName} = new Vector3(float.Parse(tempArr[0]),float.Parse(tempArr[1]),float.Parse(tempArr[2]));";
-
                                     parseByBytes += $@"
             {dataName} = new Vector3(rd.ReadSingle(),rd.ReadSingle(),rd.ReadSingle());";
                                 }
@@ -300,13 +177,6 @@ namespace PerillaTable
 ";
                                     vecStr = vecStr.Replace("name", dataName);
                                     cshapClassStr += vecStr;
-
-                                    tempArr = "string[] tempArr";
-                                    if (parseByStr.Contains(tempArr))
-                                        tempArr = "tempArr";
-                                    parseByStr += $@"
-            {tempArr} = tempStrs[count++].Split(',');
-            {dataName} = new Vector2(float.Parse(tempArr[0]),float.Parse(tempArr[1]));";
 
                                     parseByBytes += $@"
             {dataName} = new Vector2(rd.ReadSingle(),rd.ReadSingle());";
@@ -319,13 +189,6 @@ namespace PerillaTable
                                     colorStr = colorStr.Replace("name", dataName);
                                     cshapClassStr += colorStr;
 
-                                    tempArr = "string[] tempArr";
-                                    if (parseByStr.Contains(tempArr))
-                                        tempArr = "tempArr";
-                                    parseByStr += $@"
-            {tempArr} = tempStrs[count++].Split(',');
-            {dataName} = new Color(float.Parse(tempArr[0]),float.Parse(tempArr[1]),float.Parse(tempArr[2]),float.Parse(tempArr[3]));";
-
                                     parseByBytes += $@"
             {dataName} = new Color(rd.ReadSingle(),rd.ReadSingle(),rd.ReadSingle(),rd.ReadSingle());";
                                 }
@@ -334,42 +197,23 @@ namespace PerillaTable
                                          dataType.ToLower() == "string" ||
                                          dataType.ToLower() == "bool")
                                 {
-                                    if (dataName.ToLower() != "id")
-                                    {
-                                        string tempPropertyStr = propertyStr;
-                                        tempPropertyStr = tempPropertyStr.Replace("dataType", dataType);
-                                        tempPropertyStr = tempPropertyStr.Replace("dataName", dataName);
-                                        cshapClassStr += tempPropertyStr;
-                                    }
+                                    string tempPropertyStr = propertyStr;
+                                    tempPropertyStr = tempPropertyStr.Replace("dataType", dataType);
+                                    tempPropertyStr = tempPropertyStr.Replace("dataName", dataName);
+                                    cshapClassStr += tempPropertyStr;
 
-                                    if (dataType == "int" || dataType == "float")
-                                    {
-
-                                        parseByStr += $@"
-            {dataName} = {dataType}.Parse(tempStrs[count++]);";
-                                        if (dataType == "int")
-                                            parseByBytes += $@"
+                                    if (dataType == "int")
+                                        parseByBytes += $@"
             {dataName} = rd.ReadInt32();";
-                                        else
-                                            parseByBytes += $@"
+                                    else if (dataType == "float")
+                                        parseByBytes += $@"
             {dataName} = rd.ReadSingle();";
-
-
-                                    }
                                     else if (dataType == "string")
-                                    {
-                                        parseByStr += $@"
-            {dataName} = tempStrs[count++];";
                                         parseByBytes += $@"
             {dataName} = rd.ReadString();";
-                                    }
                                     else if (dataType == "bool")
-                                    {
-                                        parseByStr += $@"
-            {dataName} = int.Parse(tempStrs[count++]) != 0;";
                                         parseByBytes += $@"
             {dataName} = rd.ReadBoolean();";
-                                    }
                                 }
                                 else if (dataType != "")
                                 {
@@ -385,20 +229,17 @@ ErrorType:{dataType}
                     }
                 }
 
-                parseBystrStr = parseBystrStr.Replace("value", parseByStr);
                 parseBytesStr = parseBytesStr.Replace("value", parseByBytes);
-                cshapClassStr += parseBystrStr;
                 cshapClassStr += parseBytesStr;
 
                 FileTool.WriteString($"{classPath}D{className}.cs", cshapClassStr);
                 #endregion
 
                 #region 生成数据文件
-                CreateData(curSheet, rows, columns);
+                CreateData(curSheet, rows, columns, className);
 
                 Logger.Log($"{className}.cs Created");
                 #endregion
-            }
         }
 
         //自定义c#类
@@ -418,19 +259,6 @@ namespace Database
         public dataType dataName{ get;protected set; }
 ";
 
-            enumStr = @"
-public enum EnumType
-{
-";
-
-            parseStr = @"
-        public override void ParseByString(string data)
-        {
-            string[] tempStrs = data.Split('-');
-            int count = -1;value
-        }
-";
-
             parseBytes = @"
         public override void ParseByBytes(MemoryStream ms)
         {
@@ -448,12 +276,6 @@ public enum EnumType
             return Regex.Replace(value, @"\b(\w)|\s(\w)", match => match.Value.ToUpper());
         }
 
-        private string LowerFirstLetter(string value)
-        {
-            //开头是一个字母或者空格后的第一个字母
-            return Regex.Replace(value, @"\b(\w)|\s(\w)", match => match.Value.ToLower());
-        }
-
         public static List<DataTable> ExcelToDataTable(string fileName)
         {
             IWorkbook workbook = null;
@@ -461,18 +283,14 @@ public enum EnumType
 
             List<DataTable> dataList = new List<DataTable>();
             int startRow = 0;
-            string tempPath = $"./{fileName.Split('/')[^1].Replace(".xlsx", "")}.xlsx";
-            if (File.Exists(tempPath))
-                File.Delete(tempPath);
-            File.Copy(fileName, tempPath);
-            var fs = new FileStream(tempPath, FileMode.Open, FileAccess.Read);
 
-            if (fileName.IndexOf(".xlsx") > 0) // 2007版本
-                workbook = new XSSFWorkbook(fs);
-            else if (fileName.IndexOf(".xls") > 0) // 2003版本
-                workbook = new HSSFWorkbook(fs);
-            fs.Close();
-            File.Delete(tempPath);
+            using (var fs = new FileStream(fileName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                if (fileName.IndexOf(".xlsx") > 0) // 2007版本
+                    workbook = new XSSFWorkbook(fs);
+                else if (fileName.IndexOf(".xls") > 0) // 2003版本
+                    workbook = new HSSFWorkbook(fs);
+            }
 
             try
             {
@@ -483,50 +301,59 @@ public enum EnumType
                         continue;
 
                     DataTable data = new DataTable();
-                    IRow firstRow = sheet.GetRow(1);
+                    data.TableName = sheet.SheetName;
+
+                    //行序固定：0=备注(可整行空白) 1=name 2=类型 3+=数据
+                    IRow firstRow = sheet.GetRow(1); //name行
+                    if (firstRow == null)
+                    {
+                        Logger.Error($"ExcelToDataTable: sheet '{sheet.SheetName}' 缺少备注行或name行(前两行)，跳过");
+                        continue;
+                    }
                     int cellCount = firstRow.LastCellNum; //一行最后一个cell的编号 即总的列数
 
-                    for (int j = firstRow.FirstCellNum; j < cellCount; ++j)
+                    //按位置建列；name为空自动补名，重名自动去重，保证列序与Excel一致
+                    for (int j = 0; j < cellCount; ++j)
                     {
-                        ICell cell = firstRow.GetCell(j);
-                        if (cell != null)
-                        {
-                            if (cell.CellType == CellType.Formula)
-                                cell.SetCellType(CellType.String);
-
-                            string cellValue = cell.StringCellValue;
-
-                            if (cellValue != null)
-                            {
-                                DataColumn column = new DataColumn(cellValue);
-                                data.Columns.Add(column);
-                            }
-                        }
+                        string colName = firstRow.GetCell(j)?.ToString()?.Trim() ?? "";
+                        if (colName.Length == 0)
+                            colName = $"col{j}";
+                        if (data.Columns.Contains(colName))
+                            colName = $"{colName}_{j}";
+                        data.Columns.Add(colName);
                     }
 
+                    //行序固定：0=备注 1=name 2=类型 3+=数据；缺备注行时自动补空
+                    void CopyRow(int sheetRowIdx)
+                    {
+                        DataRow dataRow = data.NewRow();
+                        IRow row = sheet.GetRow(sheetRowIdx);
+                        if (row != null)
+                        {
+                            for (int k = 0; k < cellCount; ++k)
+                            {
+                                if (row.GetCell(k) != null) //没有数据的单元格默认是null
+                                {
+                                    if (row.GetCell(k).CellType == CellType.Formula)
+                                        row.GetCell(k).SetCellType(CellType.String);
+                                    dataRow[k] = row.GetCell(k).ToString();
+                                }
+                            }
+                        }
+                        data.Rows.Add(dataRow);
+                    }
 
-                    startRow = sheet.FirstRowNum;
+                    CopyRow(0); //备注（可为空）
+                    CopyRow(1); //name
+                    CopyRow(2); //类型
 
                     //最后一列的标号
                     int rowCount = sheet.LastRowNum;
-                    for (int j = startRow; j <= rowCount; ++j)
+                    for (int j = 3; j <= rowCount; ++j)
                     {
-                        IRow row = sheet.GetRow(j);
-                        if (row == null)
-                            continue; //没有数据的行默认是null　　　　　　　
-                        DataRow dataRow = data.NewRow();
-                        for (int k = row.FirstCellNum; k < cellCount; ++k)
-                        {
-                            if (row.GetCell(k) != null) //同理，没有数据的单元格都默认是null
-                            {
-
-                                if (row.GetCell(k).CellType == CellType.Formula)
-                                    row.GetCell(k).SetCellType(CellType.String);
-                                dataRow[k] = row.GetCell(k).ToString();
-                            }
-                        }
-
-                        data.Rows.Add(dataRow);
+                        if (sheet.GetRow(j) == null)
+                            continue; //没有数据的行默认是null
+                        CopyRow(j);
                     }
 
                     dataList.Add(data);
@@ -540,199 +367,402 @@ public enum EnumType
             }
         }
 
-        private void SaveData(string dataStr, string className, Config.ExportType exportType)
-        {
-            switch (exportType)
-            {
-                case Config.ExportType.Json:
-                    FileTool.WriteString($"{Config.I.dataPath}/Json/{className}.json", dataStr);
-                    break;
-                case Config.ExportType.Bytes: FileTool.WriteString($"{Config.I.dataPath}{className}", dataStr); break;
-                case Config.ExportType.Protobuf: FileTool.WriteString($"{Config.I.dataPath}{className}.proto", dataStr); break;
-            }
-        }
-
-        private void CreateData(DataTable curSheet, int rows, int columns)
+        private void CreateData(DataTable curSheet, int rows, int columns, string className)
         {
             foreach (var enumType in Config.I.exportList)
             {
                 if (enumType == Config.ExportType.Json)
-                    CreateJson(curSheet, rows, columns);
+                    CreateJson(curSheet, rows, columns, className);
 
                 else if (enumType == Config.ExportType.Bytes)
-                    CreateBytes(curSheet, rows, columns);
+                    CreateBytes(curSheet, rows, columns, className);
             }
         }
 
-        private string CreateJson(DataTable curSheet, int rows, int columns)
+        public List<SheetInfo> GetSheetInfos(string filePath)
         {
-            string rowData = "";
+            var result = new List<SheetInfo>();
+
+            IWorkbook workbook;
+            using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                if (filePath.IndexOf(".xlsx") > 0)
+                    workbook = new XSSFWorkbook(fs);
+                else if (filePath.IndexOf(".xls") > 0)
+                    workbook = new HSSFWorkbook(fs);
+                else
+                    return result;
+            }
+
+            int totalSheets = workbook.NumberOfSheets;
+
+            for (int i = 0; i < totalSheets; i++)
+            {
+                ISheet sheet = workbook.GetSheetAt(i);
+                string sheetName = sheet.SheetName;
+
+                if (sheetName.ToLower().Contains("sheet") && totalSheets != 1)
+                    continue;
+
+                var info = new SheetInfo
+                {
+                    SheetName = sheetName,
+                    ClassName = sheetName,
+                    SheetIndex = result.Count
+                };
+
+                info.RowCount = sheet.LastRowNum + 1;
+                IRow row1 = sheet.GetRow(1);
+                info.ColumnCount = (row1 != null) ? row1.LastCellNum : 0;
+                info.ModifyTime = File.GetLastWriteTime(filePath);
+
+                result.Add(info);
+            }
+
+            return result;
+        }
+
+        public List<string> ValidateFile(string filePath)
+        {
+            var issues = new List<string>();
+
+            List<DataTable> result = ExcelToDataTable(filePath);
+
+            if (result == null || result.Count == 0)
+            {
+                issues.Add($"无法读取文件或文件为空: {filePath}");
+                return issues;
+            }
+
+            for (int i = 0; i < result.Count; i++)
+            {
+                string sheetName = result[i].TableName;
+                var sheetIssues = ValidateSheet(result[i], sheetName);
+                foreach (var issue in sheetIssues)
+                {
+                    issues.Add($"[{sheetName}] {issue}");
+                }
+            }
+
+            return issues;
+        }
+
+        public List<string> ValidateSheet(DataTable sheet, string sheetName)
+        {
+            var issues = new List<string>();
+
+            if (sheet.Rows.Count < 3)
+            {
+                issues.Add($"行数不足: {sheet.Rows.Count} (需要至少4行: 备注+name+类型+数据)");
+                return issues;
+            }
+
+            //类型行（第3行）整体为空 → 很可能缺了备注行
+            int colCount = sheet.Columns.Count;
+            bool hasAnyType = false;
+            for (int j = 0; j < colCount; j++)
+            {
+                if (!string.IsNullOrEmpty(sheet.Rows[2][j].ToString().Trim()))
+                { hasAnyType = true; break; }
+            }
+            if (!hasAnyType)
+                issues.Add("第3行类型行全为空：请检查是否缺少备注行(备注行必须保留，可整行留空)");
+
+            if (sheet.Rows.Count < 4 && hasAnyType)
+                issues.Add($"缺少数据行: 共{sheet.Rows.Count}行 (需要至少4行: 备注+name+类型+数据)");
+
+            for (int j = 0; j < colCount; j++)
+            {
+                string type = sheet.Rows[2][j].ToString().Trim();
+                if (string.IsNullOrEmpty(type))
+                    continue;
+
+                if (type.StartsWith("#"))
+                    continue;
+
+                string typeLower = type.ToLower();
+                string name = sheet.Rows[1][j].ToString();
+                if (string.IsNullOrEmpty(name))
+                {
+                    issues.Add($"第{j + 1}列: 第2行name为空，但第3行有类型 '{type}'");
+                    continue;
+                }
+                ValidateType(typeLower, name, j, issues);
+            }
+
+            return issues;
+        }
+
+        private void ValidateType(string typeLower, string name, int colIndex, List<string> issues)
+        {
+            if (typeLower == "int" || typeLower == "float" || typeLower == "bool" || typeLower == "string")
+                return;
+
+            if (typeLower == "int[]" || typeLower == "float[]" || typeLower == "bool[]" || typeLower == "string[]")
+                return;
+
+            if (typeLower == "vector2" || typeLower == "vector3" || typeLower == "color")
+                return;
+
+            if (typeLower == "vector2[]" || typeLower == "vector3[]" || typeLower == "color[]")
+            {
+                issues.Add($"第{colIndex + 1}列: 不支持的数组类型 '{typeLower}'");
+                return;
+            }
+
+            if (typeLower.StartsWith("dic"))
+            {
+                if (!typeLower.StartsWith("dic<") || !typeLower.EndsWith(">"))
+                {
+                    issues.Add($"第{colIndex + 1}列: dic类型格式错误，应为 'dic<keyType,valueType>'，实际为 '{typeLower}'");
+                    return;
+                }
+
+                string inner = typeLower.Substring(4, typeLower.Length - 5);
+                string[] parts = inner.Split(',');
+                if (parts.Length != 2)
+                {
+                    issues.Add($"第{colIndex + 1}列: dic类型格式错误，应为 'dic<keyType,valueType>'，实际为 '{typeLower}'");
+                    return;
+                }
+
+                string keyType = parts[0].Trim();
+                string valueType = parts[1].Trim();
+
+                if (keyType != "int" && keyType != "float" && keyType != "bool" && keyType != "string")
+                {
+                    issues.Add($"第{colIndex + 1}列: dic键类型 '{keyType}' 不是合法类型 (int/float/bool/string)");
+                }
+                if (valueType != "int" && valueType != "float" && valueType != "bool" && valueType != "string")
+                {
+                    issues.Add($"第{colIndex + 1}列: dic值类型 '{valueType}' 不是合法类型 (int/float/bool/string)");
+                }
+                return;
+            }
+
+            issues.Add($"第{colIndex + 1}列: 未知类型 '{typeLower}'");
+        }
+
+        private string EscapeJsonString(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return "";
+            var sb = new StringBuilder();
+            foreach (char c in value)
+            {
+                switch (c)
+                {
+                    case '"': sb.Append("\\\""); break;
+                    case '\\': sb.Append("\\\\"); break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\r': sb.Append("\\r"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    case '\b': sb.Append("\\b"); break;
+                    case '\f': sb.Append("\\f"); break;
+                    default:
+                        if (c < 0x20)
+                            sb.Append($"\\u{(int)c:X4}");
+                        else
+                            sb.Append(c);
+                        break;
+                }
+            }
+            return sb.ToString();
+        }
+
+        private string CreateJson(DataTable curSheet, int rows, int columns, string className)
+        {
             if (rows <= 3)
                 return null;
 
+            var sb = new StringBuilder();
+            sb.Append("[");
+
+            int rowNum = 0;
             for (int i = 3; i < rows; ++i)
             {
                 if (curSheet.Rows[i][0].ToString().StartsWith("#"))
                     continue;
 
-                for (int j = 1; j < columns; ++j)
+                if (rowNum > 0)
+                    sb.Append(",");
+                sb.Append("{");
+
+                bool isFirst = true;
+                string activeDicName = null;
+                string activeDicValueType = null;
+
+                for (int j = 0; j < columns; ++j)
                 {
-                    if (string.IsNullOrEmpty(curSheet.Rows[2][j].ToString()))
+                    string typeRaw = curSheet.Rows[2][j].ToString();
+                    if (string.IsNullOrEmpty(typeRaw))
                         continue;
 
-                    rowData += $"{curSheet.Rows[2][j]}{split01}{curSheet.Rows[1][j]}{split01}{curSheet.Rows[i][j]}{split02}";
-                }
-                rowData = rowData.Substring(0, rowData.Length - 1);
-                rowData += split03;
-            }
-            rowData = rowData.Substring(0, rowData.Length - 1);
+                    string type = typeRaw.ToLower();
+                    string name = curSheet.Rows[1][j].ToString();
+                    string value = curSheet.Rows[i][j].ToString();
 
-
-            string jsonData = "[";
-            string[] rowStrs = rowData.Split(split03);
-            int rowNum = 0;
-            foreach (var rowStr in rowStrs)
-            {
-                string[] colStrs = rowStr.Split(split02);
-                bool isDic = false;
-                bool isFistDic = true;
-                jsonData += "{";
-                for (int i = 0; i < colStrs.Length; i++)
-                {
-                    string[] eachStrs = colStrs[i].Split(split01);
-
-                    if (eachStrs[0].ToLower().StartsWith("dic"))
+                    if (type.StartsWith("dic"))
                     {
-                        isDic = true;
-                        eachStrs[0] = eachStrs[0].Split('<')[1].Split('>')[0];
-                        string[] dicTypes = eachStrs[0].Split(',');
-                        string[] dicDataStrs = eachStrs[1].Split(':');
-                        if (isFistDic)
+                        string dicTypes = typeRaw.Split('<')[1].Split('>')[0];
+                        string[] dicTypeArr = dicTypes.Split(',');
+                        string[] nameParts = name.Split(':');
+                        string dicVarName = UpperFirstLetter(nameParts[0]);
+                        string dicKey = nameParts[1];
+
+                        if (activeDicName != dicVarName)
                         {
-                            isFistDic = false;
-                            jsonData += $"\"{UpperFirstLetter(dicDataStrs[0])}\":{{";
+                            if (activeDicName != null)
+                                sb.Append("},");
+
+                            if (isFirst)
+                                isFirst = false;
+                            else
+                                sb.Append(",");
+
+                            sb.Append($"\"{dicVarName}\":{{");
+                            activeDicName = dicVarName;
+                            activeDicValueType = dicTypeArr[1];
+                        }
+                        else
+                        {
+                            sb.Append(",");
                         }
 
-                        if (dicTypes[0] == "string")
-                            jsonData += $"\"{UpperFirstLetter(dicDataStrs[1])}\":";
+                        if (dicTypeArr[0] == "string")
+                            sb.Append($"\"{UpperFirstLetter(dicKey)}\":");
                         else
-                            jsonData += $"{UpperFirstLetter(dicDataStrs[1])}:";
+                            sb.Append($"{UpperFirstLetter(dicKey)}:");
 
-                        if (dicTypes[1] == "string")
-                            jsonData += $"\"{eachStrs[2]}\",";
-                        else
-                            jsonData += $"{eachStrs[2]},";
+                        if (activeDicValueType == "string")
+                            sb.Append($"\"{EscapeJsonString(value)}\"");
+                        else if (activeDicValueType == "int")
+                            sb.Append($"{(string.IsNullOrEmpty(value) ? 0 : int.Parse(value))}");
+                        else if (activeDicValueType == "float")
+                            sb.Append($"{(string.IsNullOrEmpty(value) ? 0 : float.Parse(value))}");
+                        else if (activeDicValueType == "bool")
+                            sb.Append($"{(string.IsNullOrEmpty(value) ? "false" : value.ToLower())}");
                     }
                     else
                     {
-                        if (isDic)
+                        if (activeDicName != null)
                         {
-                            isDic = false;
-                            isFistDic = true;
-                            jsonData = jsonData.Substring(0, jsonData.Length - 1);
-                            jsonData += "},";
+                            sb.Append("}");
+                            activeDicName = null;
                         }
 
-                        switch (eachStrs[0].ToLower())
+                        if (isFirst)
+                            isFirst = false;
+                        else
+                            sb.Append(",");
+
+                        string pascalName = UpperFirstLetter(name);
+
+                        switch (type)
                         {
                             case "int":
-                                if (string.IsNullOrEmpty(eachStrs[2]))
-                                    eachStrs[2] = "0";
-                                jsonData += $"\"{UpperFirstLetter(eachStrs[1])}\":{int.Parse(eachStrs[2])}";
+                                sb.Append($"\"{pascalName}\":{(string.IsNullOrEmpty(value) ? 0 : int.Parse(value))}");
                                 break;
                             case "float":
-                                if (string.IsNullOrEmpty(eachStrs[2]))
-                                    eachStrs[2] = "0";
-                                jsonData += $"\"{UpperFirstLetter(eachStrs[1])}\":{float.Parse(eachStrs[2])}";
+                                sb.Append($"\"{pascalName}\":{(string.IsNullOrEmpty(value) ? 0 : float.Parse(value))}");
                                 break;
                             case "bool":
-                                if (string.IsNullOrEmpty(eachStrs[2]))
-                                    eachStrs[2] = "FALSE";
-                                jsonData += $"\"{UpperFirstLetter(eachStrs[1])}\":{eachStrs[2].ToLower()}";
+                                sb.Append($"\"{pascalName}\":{(string.IsNullOrEmpty(value) ? "false" : value.ToLower())}");
                                 break;
                             case "string":
-                                jsonData += $"\"{UpperFirstLetter(eachStrs[1])}\":\"{eachStrs[2]}\"";
+                                sb.Append($"\"{pascalName}\":\"{EscapeJsonString(value)}\"");
                                 break;
                             case "string[]":
-                                string[] tempStrs = eachStrs[2].Split(',');
-                                eachStrs[2] = "";
-                                foreach (var str in tempStrs)
                                 {
-                                    eachStrs[2] += $"\"{str}\",";
+                                    string[] arr = value.Split(',');
+                                    sb.Append($"\"{pascalName}\":[");
+                                    for (int k = 0; k < arr.Length; k++)
+                                    {
+                                        if (k > 0) sb.Append(",");
+                                        sb.Append($"\"{EscapeJsonString(arr[k])}\"");
+                                    }
+                                    sb.Append("]");
                                 }
-                                eachStrs[2] = eachStrs[2].Substring(0, eachStrs[2].Length - 1);
-                                jsonData += $"\"{UpperFirstLetter(eachStrs[1])}\":[{eachStrs[2]}]";
                                 break;
                             case "int[]":
-                                tempStrs = eachStrs[2].Split(',');
-                                eachStrs[2] = "";
-                                foreach (var str in tempStrs)
                                 {
-                                    if (str == "")
-                                        eachStrs[2] += $"{0},";
-                                    else
-                                        eachStrs[2] += $"{str},";
+                                    string[] arr = value.Split(',');
+                                    sb.Append($"\"{pascalName}\":[");
+                                    for (int k = 0; k < arr.Length; k++)
+                                    {
+                                        if (k > 0) sb.Append(",");
+                                        sb.Append(string.IsNullOrEmpty(arr[k]) ? "0" : arr[k]);
+                                    }
+                                    sb.Append("]");
                                 }
-                                eachStrs[2] = eachStrs[2].Substring(0, eachStrs[2].Length - 1);
-                                jsonData += $"\"{UpperFirstLetter(eachStrs[1])}\":[{eachStrs[2].ToLower()}]";
                                 break;
                             case "float[]":
-                                tempStrs = eachStrs[2].Split(',');
-
-
-                                eachStrs[2] = "";
-                                foreach (var str in tempStrs)
                                 {
-                                    if (str == "")
-                                        eachStrs[2] += $"{0},";
-                                    else
-                                        eachStrs[2] += $"{str},";
+                                    string[] arr = value.Split(',');
+                                    sb.Append($"\"{pascalName}\":[");
+                                    for (int k = 0; k < arr.Length; k++)
+                                    {
+                                        if (k > 0) sb.Append(",");
+                                        sb.Append(string.IsNullOrEmpty(arr[k]) ? "0" : arr[k]);
+                                    }
+                                    sb.Append("]");
                                 }
-                                eachStrs[2] = eachStrs[2].Substring(0, eachStrs[2].Length - 1);
-                                jsonData += $"\"{UpperFirstLetter(eachStrs[1])}\":[{eachStrs[2].ToLower()}]";
                                 break;
                             case "bool[]":
-                                if (eachStrs[2] == "")
-                                    eachStrs[2] = "FALSE";
-                                jsonData += $"\"{UpperFirstLetter(eachStrs[1])}\":[{eachStrs[2].ToLower()}]";
+                                {
+                                    if (string.IsNullOrEmpty(value))
+                                        sb.Append($"\"{pascalName}\":[false]");
+                                    else
+                                        sb.Append($"\"{pascalName}\":[{value.ToLower()}]");
+                                }
                                 break;
                             case "vector3":
-                                string[] tempStrs1 = eachStrs[2].Split(',');
-                                jsonData +=
-                                    $"\"{UpperFirstLetter(eachStrs[1])}\":{{\"x\":{float.Parse(tempStrs1[0])},\"y\":{float.Parse(tempStrs1[1])},\"z\":{float.Parse(tempStrs1[2])}}}";
+                                {
+                                    string[] arr = value.Split(',');
+                                    sb.Append($"\"{pascalName}\":{{\"x\":{float.Parse(arr[0])},\"y\":{float.Parse(arr[1])},\"z\":{float.Parse(arr[2])}}}");
+                                }
                                 break;
                             case "vector2":
-                                string[] tempStrs2 = eachStrs[2].Split(',');
-                                jsonData +=
-                                    $"\"{UpperFirstLetter(eachStrs[1])}\":{{\"x\":{float.Parse(tempStrs2[0])},\"y\":{float.Parse(tempStrs2[1])}}}";
+                                {
+                                    string[] arr = value.Split(',');
+                                    sb.Append($"\"{pascalName}\":{{\"x\":{float.Parse(arr[0])},\"y\":{float.Parse(arr[1])}}}");
+                                }
                                 break;
                             case "color":
-                                string[] tempStrs3 = eachStrs[2].Split(',');
-                                jsonData +=
-                                    $"\"{UpperFirstLetter(eachStrs[1])}\":{{\"r\":{float.Parse(tempStrs3[0])},\"g\":{float.Parse(tempStrs3[1])},\"b\":{float.Parse(tempStrs3[2])},\"a\":{float.Parse(tempStrs3[2])}}}";
+                                {
+                                    string[] arr = value.Split(',');
+                                    sb.Append($"\"{pascalName}\":{{\"r\":{float.Parse(arr[0])},\"g\":{float.Parse(arr[1])},\"b\":{float.Parse(arr[2])},\"a\":{float.Parse(arr[3])}}}");
+                                }
                                 break;
-                            case "enum":
-                                jsonData += $"\"{UpperFirstLetter(eachStrs[1])}\":{enumTypesDic[eachStrs[1].ToLower()][eachStrs[2].ToLower()]}";
+                            case "vector3[]":
+                            case "vector2[]":
+                            case "color[]":
+                                Logger.Warning($"Unsupported array type '{type}' in row {rowNum}, column {j}, skipping");
                                 break;
                             default:
-                                Logger.Error($"wrong type int row:{rowNum}--column:{i}");
+                                Logger.Error($"wrong type in row:{rowNum}--column:{j}, type:{type}");
                                 break;
                         }
-                        jsonData += ",";
                     }
                 }
-                jsonData = jsonData.Substring(0, jsonData.Length - 1);
-                jsonData += "},";
+
+                if (activeDicName != null)
+                {
+                    sb.Append("}");
+                }
+
+                sb.Append("}");
                 rowNum++;
             }
 
-            jsonData = jsonData.Substring(0, jsonData.Length - 1) + "]";
+            sb.Append("]");
 
+            string jsonData = sb.ToString();
             FileTool.WriteString($"{Config.I.dataPath}/Json/D{className}.json", jsonData);
             return jsonData;
         }
 
-        private void CreateBytes(DataTable curSheet, int rows, int columns)
+        private void CreateBytes(DataTable curSheet, int rows, int columns, string className)
         {
             if (rows <= 3)
                 return;
@@ -752,7 +782,7 @@ public enum EnumType
                         dataInfos.Add(dataCount, bw.BaseStream.Position);
 
                         long bwLen = bw.BaseStream.Length;
-                        for (int j = 1; j < columns; ++j)
+                        for (int j = 0; j < columns; ++j)
                         {
                             if (string.IsNullOrEmpty(curSheet.Rows[2][j].ToString()))
                                 continue;
@@ -773,8 +803,8 @@ public enum EnumType
                                     bw.Write(value); break;
                                 case "bool":
                                     if (string.IsNullOrEmpty(value))
-                                        value = "FALSE";
-                                    bw.Write(Convert.ToBoolean(value)); break;
+                                        value = "false";
+                                    bw.Write(value.ToLower() == "true" || value == "1"); break;
                                 case "vector3":
                                     string[] tempArr = value.Split(',');
                                     bw.Write(Convert.ToSingle(tempArr[0]));
@@ -793,8 +823,11 @@ public enum EnumType
                                     bw.Write(Convert.ToSingle(tempArr[0]));
                                     bw.Write(Convert.ToSingle(tempArr[1]));
                                     break;
-                                case "enum":
-                                    bw.Write(enumTypesDicByte[curSheet.Rows[1][j].ToString().ToLower()][value.ToLower()]);
+                                default:
+                                    if (type.StartsWith("dic"))
+                                        Logger.Warning($"dic type is not supported in bytes export (column {j}, row {i}), skipping. Use a linked table instead.");
+                                    else if (type.EndsWith("[]"))
+                                        Logger.Warning($"Unsupported array type '{type}' in bytes export (column {j}, row {i}), skipping.");
                                     break;
                             }
 
@@ -821,7 +854,7 @@ public enum EnumType
                                             break;
                                         case "bool":
                                             if (str != "")
-                                                bw.Write(Convert.ToBoolean(str));
+                                                bw.Write(str.ToLower() == "true" || str == "1");
                                             else
                                                 bw.Write(false);
                                             break;
