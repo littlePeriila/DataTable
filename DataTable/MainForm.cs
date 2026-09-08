@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -967,12 +968,12 @@ namespace PerillaTable
             btnExport.Enabled = false;
             btnExport.Text = "导出中...";
 
+            var excelTool = new ExcelTool();
+
             try
             {
                 await Task.Run(() =>
                 {
-                    var excelTool = new ExcelTool();
-
                     if (_fileList != null)
                     {
                         Logger.Log($"开始导出勾选的 {_fileList.Count} 个文件...");
@@ -980,17 +981,16 @@ namespace PerillaTable
                         {
                             if (file.Contains("~$"))
                                 continue;
-                            try { excelTool.CreateDataTable(file); }
-                            catch (Exception ex) { Logger.Error(ex); }
+                            ExportOneFile(excelTool, file);
                         }
                     }
                     else if (_filePath != null)
                     {
                         Logger.Log($"开始导出: {Path.GetFileName(_filePath)}");
                         if (_sheetIndex.HasValue)
-                            excelTool.CreateDataTable(_filePath, _sheetIndex.Value);
+                            ExportOneFile(excelTool, _filePath, _sheetIndex.Value);
                         else
-                            excelTool.CreateDataTable(_filePath);
+                            ExportOneFile(excelTool, _filePath);
                     }
                     else
                     {
@@ -1002,18 +1002,24 @@ namespace PerillaTable
                             if (file.Contains("Enum.xlsx") || file.Contains("~$"))
                                 continue;
                             if (file.Contains(".xls"))
-                            {
-                                try { excelTool.CreateDataTable(file); }
-                                catch (Exception ex) { Logger.Error(ex); }
-                            }
+                                ExportOneFile(excelTool, file);
                         }
                     }
                 });
 
-                Logger.Log("导出完成!");
-                MessageBox.Show("导出完成!", "成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                DialogResult = DialogResult.OK;
-                Close();
+                if (excelTool.ExportErrors.Count > 0)
+                {
+                    Logger.Error($"导出完成，但有 {excelTool.ExportErrors.Count} 个严重错误，相关表已跳过");
+                    using var errDialog = new ErrorReportDialog(excelTool.ExportErrors, excelTool.ExportedSheetCount);
+                    errDialog.ShowDialog(this);
+                }
+                else
+                {
+                    Logger.Log("导出完成!");
+                    MessageBox.Show("导出完成!", "成功", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    DialogResult = DialogResult.OK;
+                    Close();
+                }
             }
             catch (Exception ex)
             {
@@ -1028,6 +1034,114 @@ namespace PerillaTable
                     btnExport.Text = "导出";
                 }
             }
+        }
+
+        //单文件导出：异常计入错误报告，保证最终弹窗能看到完整错误
+        private static void ExportOneFile(ExcelTool excelTool, string file, int sheetIndex)
+        {
+            try { excelTool.CreateDataTable(file, sheetIndex); }
+            catch (Exception ex)
+            {
+                Logger.Error(ex);
+                excelTool.ExportErrors.Add(new ExportError(file, "", 0, 0, $"导出异常: {ex.Message}"));
+            }
+        }
+
+        private static void ExportOneFile(ExcelTool excelTool, string file)
+        {
+            try { excelTool.CreateDataTable(file); }
+            catch (Exception ex)
+            {
+                Logger.Error(ex);
+                excelTool.ExportErrors.Add(new ExportError(file, "", 0, 0, $"导出异常: {ex.Message}"));
+            }
+        }
+    }
+
+    // ──────────────────────────────────────────────
+
+    //导出错误报告：按文件/表分组展示严重错误(行列+原因)，这些表已被跳过未导出
+    class ErrorReportDialog : Form
+    {
+        public ErrorReportDialog(List<ExportError> errors, int exportedSheetCount)
+        {
+            Text = "导出错误报告";
+            Width = 860;
+            Height = 540;
+            StartPosition = FormStartPosition.CenterParent;
+            MinimizeBox = false;
+
+            int failedTables = errors
+                .Select(e => (e.FilePath, e.SheetName))
+                .Distinct()
+                .Count();
+
+            var root = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 3,
+                Padding = new Padding(10)
+            };
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+
+            var lblSummary = new Label
+            {
+                Text = $"导出完成: 成功 {exportedSheetCount} 个表；跳过 {failedTables} 个表 (共 {errors.Count} 个严重错误)，详情如下:",
+                Dock = DockStyle.Fill,
+                Height = 28,
+                TextAlign = ContentAlignment.MiddleLeft
+            };
+            root.Controls.Add(lblSummary, 0, 0);
+
+            var txtErrors = new TextBox
+            {
+                Dock = DockStyle.Fill,
+                Multiline = true,
+                ReadOnly = true,
+                ScrollBars = ScrollBars.Both,
+                WordWrap = false,
+                Font = new Font("Consolas", 9F)
+            };
+
+            var sb = new StringBuilder();
+            string? lastKey = null;
+            foreach (var err in errors)
+            {
+                string key = $"{err.FilePath}|{err.SheetName}";
+                if (key != lastKey)
+                {
+                    if (lastKey != null)
+                        sb.AppendLine();
+                    string sheetLabel = string.IsNullOrEmpty(err.SheetName) ? "(文件级)" : err.SheetName;
+                    sb.AppendLine($"── 文件: {Path.GetFileName(err.FilePath)}    表: {sheetLabel}");
+                    lastKey = key;
+                }
+                sb.AppendLine($"  {err}");
+            }
+            txtErrors.Text = sb.ToString();
+            root.Controls.Add(txtErrors, 0, 1);
+
+            var btnPanel = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.RightToLeft,
+                Padding = new Padding(0, 6, 0, 0)
+            };
+            var btnOk = new Button { Text = "确定", Width = 90, DialogResult = DialogResult.OK };
+            var btnCopy = new Button { Text = "复制信息", Width = 90 };
+            btnCopy.Click += (s, e) =>
+            {
+                try { Clipboard.SetText(txtErrors.Text); } catch { }
+            };
+            btnPanel.Controls.Add(btnOk);
+            btnPanel.Controls.Add(btnCopy);
+            root.Controls.Add(btnPanel, 0, 2);
+
+            Controls.Add(root);
+            AcceptButton = btnOk;
         }
     }
 }

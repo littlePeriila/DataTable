@@ -18,6 +18,33 @@ namespace PerillaTable
         public DateTime ModifyTime;
     }
 
+    //导出严重错误：定位到Excel行/列(从1开始)；Row=0表示整表/文件级错误
+    public class ExportError
+    {
+        public string FilePath = "";
+        public string SheetName = "";
+        public int Row;
+        public int Column;
+        public string Reason = "";
+
+        public ExportError(string filePath, string sheetName, int row, int column, string reason)
+        {
+            FilePath = filePath;
+            SheetName = sheetName;
+            Row = row;
+            Column = column;
+            Reason = reason;
+        }
+
+        public override string ToString()
+        {
+            string loc = Row > 0
+                ? $"行{Row}" + (Column > 0 ? $" 列{Column}" : "")
+                : "整表";
+            return $"{loc}: {Reason}";
+        }
+    }
+
     class ExcelTool
     {
         public ExcelTool()
@@ -29,13 +56,132 @@ namespace PerillaTable
         private string propertyStr;
         private string parseBytes;
 
+        //本次导出累计的严重错误(含被跳过的表)与成功导出的表数
+        public readonly List<ExportError> ExportErrors = new();
+        public int ExportedSheetCount;
+
+        #region enum支持
+
+        //enum定义：列名(小写) → (成员名(小写) → 序号)；来自 Enum.xlsx，每列一个枚举
+        private Dictionary<string, Dictionary<string, int>>? enumTypesDic;
+        private string? enumTypeCsContent;
+        private bool enumDataLoaded;
+
+        //加载 Enum.xlsx（每列一个枚举：第1行=枚举名，其后每行=成员名，序号从0递增）
+        private void LoadEnumData()
+        {
+            if (enumDataLoaded)
+                return;
+            enumDataLoaded = true;
+            enumTypesDic = new Dictionary<string, Dictionary<string, int>>(StringComparer.OrdinalIgnoreCase);
+
+            string enumPath = Config.I.excelPath + "Enum.xlsx";
+            if (!File.Exists(enumPath))
+            {
+                Logger.Error($"LoadEnumData: 未找到 {enumPath}，enum 类型列将无法导出");
+                return;
+            }
+
+            List<DataTable>? result = ExcelToDataTable(enumPath);
+            if (result == null || result.Count == 0)
+            {
+                Logger.Error("LoadEnumData: Enum.xlsx 解析失败或没有可用sheet");
+                return;
+            }
+
+            DataTable curSheet = result[0];
+            var fileStr = new StringBuilder();
+
+            for (int j = 0; j < curSheet.Columns.Count; ++j)
+            {
+                string enumName = curSheet.Rows[0][j].ToString().Trim();
+                if (string.IsNullOrEmpty(enumName))
+                    continue;
+
+                var members = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                var memberNames = new List<string>();
+                for (int i = 1; i < curSheet.Rows.Count; ++i)
+                {
+                    string member = curSheet.Rows[i][j].ToString().Trim();
+                    if (string.IsNullOrEmpty(member))
+                        continue;
+                    if (members.ContainsKey(member))
+                        continue;
+
+                    members.Add(member, members.Count);
+                    memberNames.Add(UpperFirstLetter(member));
+                }
+
+                if (members.Count == 0)
+                    continue;
+
+                enumTypesDic.Add(enumName.ToLower(), members);
+
+                fileStr.AppendLine($"public enum Enum{UpperFirstLetter(enumName)}");
+                fileStr.AppendLine("{");
+                for (int m = 0; m < memberNames.Count; ++m)
+                {
+                    if (m < memberNames.Count - 1)
+                        fileStr.AppendLine($"    {memberNames[m]},");
+                    else
+                        fileStr.AppendLine($"    {memberNames[m]}");
+                }
+                fileStr.AppendLine("}");
+                fileStr.AppendLine();
+            }
+
+            enumTypeCsContent = fileStr.Length > 0 ? fileStr.ToString() : null;
+            Logger.Log($"LoadEnumData: 已加载 {enumTypesDic.Count} 个枚举定义 ({Path.GetFileName(enumPath)})");
+        }
+
+        //生成 EnumType.cs 到 classPath（导出流程调用；校验流程只加载映射不写文件）
+        private void GenerateEnumTypeFile()
+        {
+            if (enumTypeCsContent == null)
+                return;
+            FileTool.WriteString($"{Config.I.classPath}EnumType.cs", enumTypeCsContent);
+            Logger.Log("EnumType.cs Created");
+        }
+
+        //查表：enum列的成员名 → 序号；缺失时报错返回0（严格校验通过时不会走到这里）
+        private int GetEnumValue(string enumName, string memberValue)
+        {
+            if (string.IsNullOrEmpty(memberValue))
+            {
+                Logger.Error($"enum '{enumName}' 出现空值，按 0 导出");
+                return 0;
+            }
+
+            if (enumTypesDic != null &&
+                enumTypesDic.TryGetValue(enumName.ToLower(), out var members) &&
+                members.TryGetValue(memberValue.ToLower(), out int index))
+            {
+                return index;
+            }
+
+            Logger.Error($"enum '{enumName}' 未定义成员 '{memberValue}'（检查 Enum.xlsx），按 0 导出");
+            return 0;
+        }
+
+        #endregion
+
         public void CreateDataTable(string path)
         {
+            //Enum.xlsx 是枚举定义表：只加载枚举映射并生成 EnumType.cs，不作为数据表导出
+            if (Path.GetFileName(path).Equals("Enum.xlsx", StringComparison.OrdinalIgnoreCase))
+            {
+                LoadEnumData();
+                GenerateEnumTypeFile();
+                return;
+            }
+
+            LoadEnumData();
+
             string classPath = Config.I.classPath;
-            List<DataTable> result = ExcelToDataTable(path);
+            List<DataTable> result = ExcelToDataTable(path, ExportErrors);
             if (result == null)
             {
-                Logger.Log($"ExcelToDataTable:{path} NULL");
+                Logger.Error($"ExcelToDataTable:{path} NULL");
                 return;
             }
 
@@ -48,11 +194,13 @@ namespace PerillaTable
 
         public void CreateDataTable(string path, int sheetIndex)
         {
+            LoadEnumData();
+
             string classPath = Config.I.classPath;
-            List<DataTable> result = ExcelToDataTable(path);
+            List<DataTable> result = ExcelToDataTable(path, ExportErrors);
             if (result == null)
             {
-                Logger.Log($"ExcelToDataTable:{path} NULL");
+                Logger.Error($"ExcelToDataTable:{path} NULL");
                 return;
             }
 
@@ -68,8 +216,25 @@ namespace PerillaTable
 
         private void ProcessSheet(DataTable curSheet, string path, string classPath)
         {
-            //类名即sheet名（sheet名包含"sheet"的表单已在读取时跳过）
+            //类名优先取备注行首格的 #ClassName 标记（多表文件约定），无标记时用sheet名
             string className = curSheet.TableName;
+            Match markerMatch = Regex.Match((curSheet.Rows[0][0].ToString() ?? "").Trim(), @"^#(\w+)$");
+            if (markerMatch.Success)
+                className = markerMatch.Groups[1].Value;
+
+            //导出前严格校验：有严重错误的表整体跳过，不生成C#类和数据文件
+            var sheetErrors = ValidateSheetStrict(curSheet, className);
+            if (sheetErrors.Count > 0)
+            {
+                foreach (var err in sheetErrors)
+                {
+                    err.FilePath = path;
+                    ExportErrors.Add(err);
+                    Logger.Error($"{Path.GetFileName(path)} [{className}] {err}");
+                }
+                Logger.Error($"表 '{className}' 存在{sheetErrors.Count}个严重错误，已跳过不导出 ({Path.GetFileName(path)})");
+                return;
+            }
 
             int columns = curSheet.Columns.Count;
             int rows = curSheet.Rows.Count;
@@ -215,6 +380,17 @@ namespace PerillaTable
                                         parseByBytes += $@"
             {dataName} = rd.ReadBoolean();";
                                 }
+                                else if (dataType.ToLower() == "enum")
+                                {
+                                    //enum列：属性类型为 Enum{列名}（定义在 EnumType.cs，由 Enum.xlsx 生成）
+                                    string tempPropertyStr = propertyStr;
+                                    tempPropertyStr = tempPropertyStr.Replace("dataType", "Enum" + dataName);
+                                    tempPropertyStr = tempPropertyStr.Replace("dataName", dataName);
+                                    cshapClassStr += tempPropertyStr;
+
+                                    parseByBytes += $@"
+            {dataName} = (Enum{dataName})rd.ReadInt16();";
+                                }
                                 else if (dataType != "")
                                 {
                                     Logger.Error($@"====Error====
@@ -238,6 +414,7 @@ ErrorType:{dataType}
                 #region 生成数据文件
                 CreateData(curSheet, rows, columns, className);
 
+                ExportedSheetCount++;
                 Logger.Log($"{className}.cs Created");
                 #endregion
         }
@@ -276,7 +453,7 @@ namespace Database
             return Regex.Replace(value, @"\b(\w)|\s(\w)", match => match.Value.ToUpper());
         }
 
-        public static List<DataTable> ExcelToDataTable(string fileName)
+        public static List<DataTable> ExcelToDataTable(string fileName, List<ExportError>? seriousErrors = null)
         {
             IWorkbook workbook = null;
             ISheet sheet = null;
@@ -290,6 +467,13 @@ namespace Database
                     workbook = new XSSFWorkbook(fs);
                 else if (fileName.IndexOf(".xls") > 0) // 2003版本
                     workbook = new HSSFWorkbook(fs);
+            }
+
+            if (workbook == null)
+            {
+                seriousErrors?.Add(new ExportError(fileName, "", 0, 0, "无法识别的文件格式，需要 .xls 或 .xlsx"));
+                Logger.Error($"ExcelToDataTable: 无法识别的文件格式: {fileName}");
+                return null;
             }
 
             try
@@ -307,10 +491,15 @@ namespace Database
                     IRow firstRow = sheet.GetRow(1); //name行
                     if (firstRow == null)
                     {
+                        seriousErrors?.Add(new ExportError(fileName, sheet.SheetName, 0, 0, "缺少name行(第2行)，已跳过该表"));
                         Logger.Error($"ExcelToDataTable: sheet '{sheet.SheetName}' 缺少备注行或name行(前两行)，跳过");
                         continue;
                     }
                     int cellCount = firstRow.LastCellNum; //一行最后一个cell的编号 即总的列数
+
+                    //记录每个DataTable行对应的Excel真实行号(从1开始)，供校验定位
+                    var excelRowMap = new List<int>();
+                    data.ExtendedProperties["ExcelRowMap"] = excelRowMap;
 
                     //按位置建列；name为空自动补名，重名自动去重，保证列序与Excel一致
                     for (int j = 0; j < cellCount; ++j)
@@ -326,6 +515,7 @@ namespace Database
                     //行序固定：0=备注 1=name 2=类型 3+=数据；缺备注行时自动补空
                     void CopyRow(int sheetRowIdx)
                     {
+                        excelRowMap.Add(sheetRowIdx + 1);
                         DataRow dataRow = data.NewRow();
                         IRow row = sheet.GetRow(sheetRowIdx);
                         if (row != null)
@@ -362,6 +552,7 @@ namespace Database
             }
             catch (Exception ex)
             {
+                seriousErrors?.Add(new ExportError(fileName, "", 0, 0, $"文件解析异常: {ex.Message}"));
                 Console.WriteLine("Exception:{0}, datalistCount{1}", ex.Message, dataList.Count);
                 return null;
             }
@@ -425,6 +616,8 @@ namespace Database
         public List<string> ValidateFile(string filePath)
         {
             var issues = new List<string>();
+
+            LoadEnumData();
 
             List<DataTable> result = ExcelToDataTable(filePath);
 
@@ -493,54 +686,259 @@ namespace Database
             return issues;
         }
 
-        private void ValidateType(string typeLower, string name, int colIndex, List<string> issues)
+        //类型格式检查：合法返回null，否则返回错误原因(供"检查"与导出严格校验共用)
+        private static string? GetTypeFormatError(string typeLower)
         {
             if (typeLower == "int" || typeLower == "float" || typeLower == "bool" || typeLower == "string")
-                return;
+                return null;
+
+            if (typeLower == "enum")
+                return null;
 
             if (typeLower == "int[]" || typeLower == "float[]" || typeLower == "bool[]" || typeLower == "string[]")
-                return;
+                return null;
 
             if (typeLower == "vector2" || typeLower == "vector3" || typeLower == "color")
-                return;
+                return null;
 
             if (typeLower == "vector2[]" || typeLower == "vector3[]" || typeLower == "color[]")
-            {
-                issues.Add($"第{colIndex + 1}列: 不支持的数组类型 '{typeLower}'");
-                return;
-            }
+                return $"不支持的数组类型 '{typeLower}'";
 
             if (typeLower.StartsWith("dic"))
             {
                 if (!typeLower.StartsWith("dic<") || !typeLower.EndsWith(">"))
-                {
-                    issues.Add($"第{colIndex + 1}列: dic类型格式错误，应为 'dic<keyType,valueType>'，实际为 '{typeLower}'");
-                    return;
-                }
+                    return $"dic类型格式错误，应为 'dic<keyType,valueType>'，实际为 '{typeLower}'";
 
                 string inner = typeLower.Substring(4, typeLower.Length - 5);
                 string[] parts = inner.Split(',');
                 if (parts.Length != 2)
-                {
-                    issues.Add($"第{colIndex + 1}列: dic类型格式错误，应为 'dic<keyType,valueType>'，实际为 '{typeLower}'");
-                    return;
-                }
+                    return $"dic类型格式错误，应为 'dic<keyType,valueType>'，实际为 '{typeLower}'";
 
                 string keyType = parts[0].Trim();
                 string valueType = parts[1].Trim();
 
+                var errs = new List<string>();
                 if (keyType != "int" && keyType != "float" && keyType != "bool" && keyType != "string")
-                {
-                    issues.Add($"第{colIndex + 1}列: dic键类型 '{keyType}' 不是合法类型 (int/float/bool/string)");
-                }
+                    errs.Add($"dic键类型 '{keyType}' 不是合法类型 (int/float/bool/string)");
                 if (valueType != "int" && valueType != "float" && valueType != "bool" && valueType != "string")
-                {
-                    issues.Add($"第{colIndex + 1}列: dic值类型 '{valueType}' 不是合法类型 (int/float/bool/string)");
-                }
-                return;
+                    errs.Add($"dic值类型 '{valueType}' 不是合法类型 (int/float/bool/string)");
+                if (errs.Count > 0)
+                    return string.Join("；", errs);
+                return null;
             }
 
-            issues.Add($"第{colIndex + 1}列: 未知类型 '{typeLower}'");
+            return $"未知类型 '{typeLower}'";
+        }
+
+        private void ValidateType(string typeLower, string name, int colIndex, List<string> issues)
+        {
+            string? typeErr = GetTypeFormatError(typeLower);
+            if (typeErr != null)
+                issues.Add($"第{colIndex + 1}列: {typeErr}");
+        }
+
+        //JSON导出会把字符串值原样写出，对数据要求更严格；仅导出Bytes时部分检查可放宽
+        private static bool ExportingJson()
+        {
+            return Config.I.exportList != null && Config.I.exportList.Contains(Config.ExportType.Json);
+        }
+
+        //导出前的严格校验：只收集会导致导出中断或生成损坏数据的严重错误；返回非空则该表整体跳过
+        private List<ExportError> ValidateSheetStrict(DataTable sheet, string sheetName)
+        {
+            var errors = new List<ExportError>();
+            var rowMap = sheet.ExtendedProperties["ExcelRowMap"] as List<int>;
+            int ExcelRow(int i) => (rowMap != null && i >= 0 && i < rowMap.Count) ? rowMap[i] : i + 1;
+
+            int colCount = sheet.Columns.Count;
+            bool jsonExporting = ExportingJson();
+            var activeCols = new List<(int colIdx, string typeLower, string? dicValueType, string colName)>();
+            var seenProps = new HashSet<string>();
+
+            for (int j = 0; j < colCount; j++)
+            {
+                //与导出一致：备注行以#开头禁用该列
+                if ((sheet.Rows[0][j].ToString() ?? "").StartsWith("#"))
+                    continue;
+
+                string typeRaw = (sheet.Rows[2][j].ToString() ?? "").Trim();
+                if (string.IsNullOrEmpty(typeRaw))
+                    continue; //类型为空 → 该列不导出
+
+                string name = sheet.Rows[1][j].ToString() ?? "";
+                int col = j + 1;
+
+                if (string.IsNullOrEmpty(name))
+                {
+                    errors.Add(new ExportError("", sheetName, ExcelRow(1), col, $"第2行name为空，但第3行有类型 '{typeRaw}'"));
+                    continue;
+                }
+                if (name.IndexOfAny(new[] { ' ', '\t', '\r', '\n' }) >= 0)
+                {
+                    errors.Add(new ExportError("", sheetName, ExcelRow(1), col, $"name不能包含空格/换行: \"{name}\""));
+                    continue;
+                }
+
+                string typeLower = typeRaw.ToLower();
+                string? typeErr = GetTypeFormatError(typeLower);
+                if (typeErr != null)
+                {
+                    errors.Add(new ExportError("", sheetName, ExcelRow(2), col, typeErr));
+                    continue;
+                }
+
+                string propName;
+                string? dicValueType = null;
+                if (typeLower.StartsWith("dic"))
+                {
+                    //dic列name必须是 变量名:key，否则JSON导出取key时会崩溃
+                    string[] nameParts = name.Split(':');
+                    if (jsonExporting &&
+                        (nameParts.Length < 2 || nameParts[0].Length == 0 || nameParts[1].Length == 0))
+                    {
+                        errors.Add(new ExportError("", sheetName, ExcelRow(1), col, $"dic类型的name格式应为 '变量名:key'，实际为 \"{name}\""));
+                        continue;
+                    }
+                    propName = UpperFirstLetter(nameParts[0]);
+                    if (jsonExporting)
+                        dicValueType = typeLower.Substring(4, typeLower.Length - 5).Split(',')[1].Trim();
+                }
+                else
+                {
+                    propName = UpperFirstLetter(name);
+                }
+
+                //生成的属性名必须是合法C#标识符
+                if (!Regex.IsMatch(propName, @"^[_\p{L}][_\p{L}\p{N}]*$"))
+                {
+                    errors.Add(new ExportError("", sheetName, ExcelRow(1), col, $"name不是合法的C#属性名: \"{propName}\""));
+                    continue;
+                }
+                if (!seenProps.Add(propName))
+                {
+                    errors.Add(new ExportError("", sheetName, ExcelRow(1), col, $"属性名重复: {propName}"));
+                    continue;
+                }
+
+                activeCols.Add((j, typeLower, dicValueType, name));
+            }
+
+            if (activeCols.Count == 0)
+            {
+                errors.Add(new ExportError("", sheetName, ExcelRow(2), 0, "没有可导出的数据列：请检查是否缺少备注行(备注行必须保留，可整行留空)，或第3行类型全为空"));
+                return errors;
+            }
+
+            if (sheet.Rows.Count < 4)
+            {
+                errors.Add(new ExportError("", sheetName, ExcelRow(sheet.Rows.Count - 1), 0, $"缺少数据行: 共{sheet.Rows.Count}行 (需要至少4行: 备注+name+类型+数据)"));
+                return errors;
+            }
+
+            //逐行校验数据值(与导出相同的跳过规则：首列以#开头)
+            for (int i = 3; i < sheet.Rows.Count; ++i)
+            {
+                if ((sheet.Rows[i][0].ToString() ?? "").StartsWith("#"))
+                    continue;
+
+                foreach (var (colIdx, typeLower, dicValueType, colName) in activeCols)
+                {
+                    //Bytes导出会整体跳过dic列，无需校验其值
+                    if (dicValueType != null && !jsonExporting)
+                        continue;
+
+                    string value = sheet.Rows[i][colIdx].ToString() ?? "";
+                    string checkType = dicValueType ?? typeLower;
+                    string? reason = GetDataValueError(checkType, value, !jsonExporting, colName);
+                    if (reason != null)
+                        errors.Add(new ExportError("", sheetName, ExcelRow(i), colIdx + 1, reason));
+                }
+            }
+
+            return errors;
+        }
+
+        //校验单个数据值能否按指定类型被导出逻辑解析；返回null表示通过
+        private string? GetDataValueError(string typeLower, string value, bool allowBoolNumeric, string colName)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                //vector/color空值会在float.Parse("")处中断导出，其余类型空值有默认
+                if (typeLower == "vector2" || typeLower == "vector3" || typeLower == "color")
+                    return $"{typeLower}值不能为空，格式应为逗号分隔的数字(如 x,y,z)";
+                return null;
+            }
+
+            switch (typeLower)
+            {
+                case "int":
+                    return int.TryParse(value, out _) ? null : $"int值无法解析: \"{value}\"";
+                case "float":
+                    return float.TryParse(value, out _) ? null : $"float值无法解析: \"{value}\"";
+                case "bool":
+                {
+                    string v = value.ToLower();
+                    bool ok = v == "true" || v == "false" || (allowBoolNumeric && (value == "1" || value == "0"));
+                    return ok ? null : $"bool值只能为 true/false: \"{value}\"";
+                }
+                case "enum":
+                {
+                    if (string.IsNullOrEmpty(value))
+                        return $"enum值不能为空（应填 Enum.xlsx 中 {colName} 的成员名）";
+                    if (enumTypesDic != null && enumTypesDic.TryGetValue(colName.ToLower(), out var members))
+                        return members.ContainsKey(value.ToLower())
+                            ? null
+                            : $"enum '{colName}' 未定义成员 '{value}'（检查 Enum.xlsx）";
+                    return $"未找到enum定义 '{colName}'（检查 Enum.xlsx 是否包含该列）";
+                }
+                case "vector2":
+                    return CheckFloatTuple(value, 2, "vector2");
+                case "vector3":
+                    return CheckFloatTuple(value, 3, "vector3");
+                case "color":
+                    return CheckFloatTuple(value, 4, "color");
+                default:
+                    if (typeLower.EndsWith("[]"))
+                    {
+                        string elemType = typeLower.Substring(0, typeLower.Length - 2);
+                        if (elemType == "string")
+                            return null;
+
+                        string[] arr = value.Split(',');
+                        for (int k = 0; k < arr.Length; k++)
+                        {
+                            string elem = arr[k];
+                            if (string.IsNullOrEmpty(elem))
+                                continue; //空元素按默认0/false导出
+
+                            if (elemType == "int" && !int.TryParse(elem, out _))
+                                return $"{typeLower}第{k + 1}个元素无法解析为int: \"{elem}\"";
+                            if (elemType == "float" && !float.TryParse(elem, out _))
+                                return $"{typeLower}第{k + 1}个元素无法解析为float: \"{elem}\"";
+                            if (elemType == "bool")
+                            {
+                                string v = elem.ToLower();
+                                bool ok = v == "true" || v == "false" || (allowBoolNumeric && (elem == "1" || elem == "0"));
+                                if (!ok)
+                                    return $"{typeLower}第{k + 1}个元素只能为 true/false: \"{elem}\"";
+                            }
+                        }
+                    }
+                    return null;
+            }
+        }
+
+        private static string? CheckFloatTuple(string value, int count, string typeName)
+        {
+            string[] arr = value.Split(',');
+            if (arr.Length < count)
+                return $"{typeName}值格式错误，需要{count}个逗号分隔的数字，实际为 \"{value}\"";
+            for (int k = 0; k < count; k++)
+            {
+                if (!float.TryParse(arr[k], out _))
+                    return $"{typeName}第{k + 1}个数字无法解析: \"{arr[k]}\"";
+            }
+            return null;
         }
 
         private string EscapeJsonString(string value)
@@ -594,6 +992,10 @@ namespace Database
 
                 for (int j = 0; j < columns; ++j)
                 {
+                    //与C#类生成/严格校验一致：备注行以#开头的列不导出（含 #类名/#name/#type 标记列）
+                    if ((curSheet.Rows[0][j].ToString() ?? "").StartsWith("#"))
+                        continue;
+
                     string typeRaw = curSheet.Rows[2][j].ToString();
                     if (string.IsNullOrEmpty(typeRaw))
                         continue;
@@ -671,6 +1073,9 @@ namespace Database
                                 break;
                             case "string":
                                 sb.Append($"\"{pascalName}\":\"{EscapeJsonString(value)}\"");
+                                break;
+                            case "enum":
+                                sb.Append($"\"{pascalName}\":{GetEnumValue(name, value)}");
                                 break;
                             case "string[]":
                                 {
@@ -784,6 +1189,10 @@ namespace Database
                         long bwLen = bw.BaseStream.Length;
                         for (int j = 0; j < columns; ++j)
                         {
+                            //与C#类生成/严格校验一致：备注行以#开头的列不导出（含 #类名/#name/#type 标记列）
+                            if ((curSheet.Rows[0][j].ToString() ?? "").StartsWith("#"))
+                                continue;
+
                             if (string.IsNullOrEmpty(curSheet.Rows[2][j].ToString()))
                                 continue;
 
@@ -805,6 +1214,9 @@ namespace Database
                                     if (string.IsNullOrEmpty(value))
                                         value = "false";
                                     bw.Write(value.ToLower() == "true" || value == "1"); break;
+                                case "enum":
+                                    bw.Write((short)GetEnumValue(curSheet.Rows[1][j].ToString(), value));
+                                    break;
                                 case "vector3":
                                     string[] tempArr = value.Split(',');
                                     bw.Write(Convert.ToSingle(tempArr[0]));
