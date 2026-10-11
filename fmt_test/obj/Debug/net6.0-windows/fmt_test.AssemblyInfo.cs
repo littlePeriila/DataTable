@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("fmt_test")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+52beb5dde8d26b08fd1bf10c530386f35f243b32")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+54af2405f5f2ca8675ef021a8f80a3efb21a0147")]
 [assembly: System.Reflection.AssemblyProductAttribute("fmt_test")]
 [assembly: System.Reflection.AssemblyTitleAttribute("fmt_test")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

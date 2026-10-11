@@ -216,11 +216,8 @@ namespace PerillaTable
 
         private void ProcessSheet(DataTable curSheet, string path, string classPath)
         {
-            //类名优先取备注行首格的 #ClassName 标记（多表文件约定），无标记时用sheet名
+            //类名 = sheet名（#类名标记设计已取消）
             string className = curSheet.TableName;
-            Match markerMatch = Regex.Match((curSheet.Rows[0][0].ToString() ?? "").Trim(), @"^#(\w+)$");
-            if (markerMatch.Success)
-                className = markerMatch.Groups[1].Value;
 
             //导出前严格校验：有严重错误的表整体跳过，不生成C#类和数据文件
             var sheetErrors = ValidateSheetStrict(curSheet, className);
@@ -453,6 +450,14 @@ namespace Database
             return Regex.Replace(value, @"\b(\w)|\s(\w)", match => match.Value.ToUpper());
         }
 
+        //数据表判定：sheet名包含"sheet"(不分大小写，仅多表文件时)或包含中文 → 跳过该表
+        private static bool IsSkippedSheetName(string sheetName, bool hasOtherSheets)
+        {
+            if (hasOtherSheets && sheetName.ToLower().Contains("sheet"))
+                return true;
+            return Regex.IsMatch(sheetName, @"[\u4e00-\u9fff]");
+        }
+
         public static List<DataTable> ExcelToDataTable(string fileName, List<ExportError>? seriousErrors = null)
         {
             IWorkbook workbook = null;
@@ -481,7 +486,7 @@ namespace Database
                 for (int i = 0; i < workbook.NumberOfSheets; ++i)
                 {
                     sheet = workbook.GetSheetAt(i);
-                    if (sheet.SheetName.ToLower().Contains("sheet") && workbook.NumberOfSheets != 1)
+                    if (IsSkippedSheetName(sheet.SheetName, workbook.NumberOfSheets != 1))
                         continue;
 
                     DataTable data = new DataTable();
@@ -592,7 +597,7 @@ namespace Database
                 ISheet sheet = workbook.GetSheetAt(i);
                 string sheetName = sheet.SheetName;
 
-                if (sheetName.ToLower().Contains("sheet") && totalSheets != 1)
+                if (IsSkippedSheetName(sheetName, totalSheets != 1))
                     continue;
 
                 var info = new SheetInfo
@@ -747,6 +752,14 @@ namespace Database
         private List<ExportError> ValidateSheetStrict(DataTable sheet, string sheetName)
         {
             var errors = new List<ExportError>();
+
+            //类名 = sheet名：必须能生成合法C#类名（中文表名已在读取时跳过）
+            if (!Regex.IsMatch(sheetName, @"^[_a-zA-Z][_a-zA-Z0-9]*$"))
+            {
+                errors.Add(new ExportError("", sheetName, 0, 0, $"表名 '{sheetName}' 不是合法的C#类名，该表已跳过"));
+                return errors;
+            }
+
             var rowMap = sheet.ExtendedProperties["ExcelRowMap"] as List<int>;
             int ExcelRow(int i) => (rowMap != null && i >= 0 && i < rowMap.Count) ? rowMap[i] : i + 1;
 
@@ -992,7 +1005,7 @@ namespace Database
 
                 for (int j = 0; j < columns; ++j)
                 {
-                    //与C#类生成/严格校验一致：备注行以#开头的列不导出（含 #类名/#name/#type 标记列）
+                    //与C#类生成/严格校验一致：备注行以#开头的列不导出
                     if ((curSheet.Rows[0][j].ToString() ?? "").StartsWith("#"))
                         continue;
 
@@ -1189,7 +1202,7 @@ namespace Database
                         long bwLen = bw.BaseStream.Length;
                         for (int j = 0; j < columns; ++j)
                         {
-                            //与C#类生成/严格校验一致：备注行以#开头的列不导出（含 #类名/#name/#type 标记列）
+                            //与C#类生成/严格校验一致：备注行以#开头的列不导出
                             if ((curSheet.Rows[0][j].ToString() ?? "").StartsWith("#"))
                                 continue;
 

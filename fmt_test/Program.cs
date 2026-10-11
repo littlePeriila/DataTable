@@ -220,6 +220,22 @@ class FmtTest
         AddRow(s, 0, "comment");
         AddRow(s, 2, "int");
 
+        // SkipCol: comment row col0 starts with '#' → col0 (stale name/type/data) must be
+        // skipped in class/JSON/bytes alike; class name comes from the sheet name "SkipTab"
+        s = wb.CreateSheet("SkipTab");
+        AddRow(s, 0, "#SkipCol", "normal col");
+        AddRow(s, 1, "legacy", "item");
+        AddRow(s, 2, "int", "string");
+        AddRow(s, 3, "1", "apple");
+        AddRow(s, 4, "2", "pear");
+
+        // ChineseSheet: sheet name contains Chinese → must be skipped entirely (no output)
+        s = wb.CreateSheet("中文表");
+        AddRow(s, 0, "comment");
+        AddRow(s, 1, "id", "name");
+        AddRow(s, 2, "int", "string");
+        AddRow(s, 3, "1", "apple");
+
         using (var fs = File.Create(path))
             wb.Write(fs);
     }

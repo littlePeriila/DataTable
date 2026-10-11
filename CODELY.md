@@ -57,23 +57,30 @@ isExportServer:False
 
 ### Testing
 
-No automated test suite exists. Verification is manual — run the tool and inspect generated output in `dataPath` and `classPath`.
+Verification uses the `fmt_test` console harness (`runtest.bat` copies `DataTable/ExcelTool.cs` into it, builds, then validates + exports every workbook under `data/`):
+
+```bash
+runtest.bat
+```
+
+`dotnet run --project fmt_test -- genbad` regenerates `data/_errtest.xlsx` containing deliberate errors (bad int value, unknown type, name with spaces, bad vector/bool values, missing name row, disabled column, Chinese sheet name) to exercise the error report and skip logic. Delete `data/_errtest.xlsx` and its `DSkipTab`/`DFine` outputs afterwards when they are not needed.
 
 ## Excel Format Convention
 
-Each Excel sheet follows a fixed row layout:
+Each Excel sheet follows a fixed row layout (no marker columns — all columns are data columns):
 
 | Row | Content |
 |---|---|
-| Row 0 | Comment / description (ignored) |
-| Row 1 | Variable names — first cell must be `#name` |
-| Row 2 | Data types — first cell must be `#type` |
+| Row 0 | Comment / description (ignored). A cell starting with `#` disables that entire column |
+| Row 1 | Variable names |
+| Row 2 | Data types |
 | Row 3+ | Data rows (rows whose first column starts with `#` are skipped) |
 
-### Class Naming
+### Class Naming & Sheet Skipping
 
-- **Single-sheet file:** The Excel filename (without extension) becomes the class name.
-- **Multi-sheet file:** The class name is taken from the first cell in the format `#{ClassName}`. Sheets whose names contain "sheet" (case-insensitive) are skipped when more than one sheet exists.
+- **Class name = sheet name**, always. There is no `#{ClassName}` marker cell.
+- A sheet is skipped (not exported) when its name contains "sheet" (case-insensitive) — except when it is the file's only sheet — or when its name contains Chinese characters.
+- Sheet names must be valid C# identifiers; otherwise the strict pre-export validation rejects the sheet with an error report.
 
 ### Supported Types
 
@@ -82,7 +89,7 @@ Each Excel sheet follows a fixed row layout:
 | Primitives | `int`, `float`, `bool`, `string` |
 | Arrays | `int[]`, `float[]`, `bool[]`, `string[]` |
 | Dictionary (KV) | `dic<keyType,valueType>` — column header uses `variableName:key` format |
-| Enum | Auto-generated from `Enum.xlsx`; enum values start at 0; type name is `Enum` + variable name |
+| Enum | Type cell `enum`; definition comes from `Enum.xlsx` matched by column name; values export as the member's index (starting at 0); property type is `Enum` + PascalCase column name |
 | Unity types | `vector3`, `vector2`, `color` |
 
 ### Enum Table (`Enum.xlsx`)
